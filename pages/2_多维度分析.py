@@ -8,7 +8,10 @@ from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.data_loader import filter_by_time, get_kpi_metrics, calc_mom_growth
+from utils.data_loader import (
+    filter_by_time, get_kpi_metrics, calc_mom_growth
+)
+from utils.exporter import get_report_title, export_to_excel, generate_html_report, export_html_report, get_download_buttons
 
 st.set_page_config(
     page_title="多维度分析 - 数析坊",
@@ -25,7 +28,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🔬 多维度分析")
+title_col, export_col = st.columns([4, 1])
+with title_col:
+    st.title("🔬 多维度分析")
+with export_col:
+    st.caption("📤 报表导出在页面底部")
 
 if 'clean_data' not in st.session_state:
     st.warning("⚠️ 数据尚未加载，请先返回首页加载数据")
@@ -39,9 +46,19 @@ if 'start_date' not in st.session_state:
     st.session_state.start_date = ov['起始日期'].date()
     st.session_state.end_date = ov['结束日期'].date()
 
+if 'category_filter' not in st.session_state:
+    st.session_state.category_filter = ['全部']
+
+ov = st.session_state.overview
+all_categories = sorted(cleaned_df['product_category'].dropna().unique().tolist())
+default_cats = st.session_state.get('category_filter', all_categories)
+
+valid_default = [c for c in default_cats if c in all_categories]
+if not valid_default:
+    valid_default = all_categories
+
 with st.sidebar:
     st.header("📋 数据概览")
-    ov = st.session_state.overview
     st.metric("总行数", f"{ov['总行数']:,}")
     st.metric("时间范围", ov['时间范围'])
     st.divider()
@@ -81,23 +98,128 @@ with st.sidebar:
         start_date, end_date = date_range
     else:
         start_date, end_date = min_dt, max_dt
+    st.session_state.start_date = start_date
+    st.session_state.end_date = end_date
+
+    st.divider()
+    st.subheader("🏷️ 品类筛选")
+    category_selected = st.multiselect(
+        "选择品类",
+        options=all_categories,
+        default=valid_default,
+        key="analysis_category"
+    )
+    if not category_selected:
+        category_selected = all_categories
+    st.session_state.category_filter = category_selected
 
     st.divider()
     st.subheader("🎯 对比维度")
     compare_mode = st.checkbox("启用环比对比", value=True)
 
-filtered_df = filter_by_time(cleaned_df, start_date, end_date)
+time_filtered = filter_by_time(cleaned_df, start_date, end_date)
+if category_selected:
+    time_filtered = time_filtered[time_filtered['product_category'].isin(category_selected)]
+filtered_df = time_filtered
+st.session_state.start_date = start_date
+st.session_state.end_date = end_date
 
 prev_df = pd.DataFrame()
 if compare_mode:
     current_span = (end_date - start_date).days
     prev_start = start_date - timedelta(days=current_span + 1)
     prev_end = start_date - timedelta(days=1)
-    prev_df = filter_by_time(full_df, prev_start, prev_end)
+    prev_time = filter_by_time(full_df, prev_start, prev_end)
+    if category_selected:
+        prev_time = prev_time[prev_time['product_category'].isin(category_selected)]
+    prev_df = prev_time
 
-st.info(f"📅 当前分析区间：**{start_date.strftime('%Y-%m-%d')}** 至 **{end_date.strftime('%Y-%m-%d')}** | 共 **{len(filtered_df):,}** 条订单")
+cat_desc = "、".join(category_selected) if len(category_selected) < len(all_categories) else "全部"
+info_msg = f"📅 当前分析区间：**{start_date.strftime('%Y-%m-%d')}** 至 **{end_date.strftime('%Y-%m-%d')}**"
+info_msg += f" | 品类：**{cat_desc}** | 共 **{len(filtered_df):,}** 条订单"
+st.info(info_msg)
 if compare_mode and not prev_df.empty:
     st.caption(f"🔄 对比区间：{prev_start.strftime('%Y-%m-%d')} 至 {prev_end.strftime('%Y-%m-%d')} | {len(prev_df):,} 条订单")
+
+with st.container():
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); padding: 1rem; border-radius: 10px; border: 1px solid #7dd3fc; margin-bottom: 1.5rem;">
+    """, unsafe_allow_html=True)
+    col_title, col_exp = st.columns([3, 1])
+    with col_title:
+        st.subheader("📤 报表导出")
+        st.caption("导出当前页面的图表与数据，包含筛选条件")
+    with col_exp:
+        rep_title, rep_subtitle = get_report_title(
+            "多维度分析", start_date, end_date,
+            categories=category_selected if len(category_selected) < len(all_categories) else None
+        )
+        kpi_dict = {}
+        figures_dict = {}
+        tables_dict = {}
+        summary_dfs = []
+        sheet_names = []
+        cat_agg = pd.DataFrame()
+        ch_agg = pd.DataFrame()
+        reg_agg = pd.DataFrame()
+
+        if not filtered_df.empty:
+            kpi = get_kpi_metrics(filtered_df, full_df)
+            kpi_dict = {
+                "总销售额": f"¥{kpi['total_sales']:,.0f}",
+                "总订单数": f"{kpi['total_orders']:,} 单",
+                "客单价": f"¥{kpi['avg_order_value']:,.2f}",
+                "品类数": f"{filtered_df['product_category'].nunique()} 个"
+            }
+
+            cat_agg = filtered_df.groupby('product_category').agg(
+                销售额=('amount', 'sum'),
+                订单数=('order_id', 'count'),
+                用户数=('user_id', 'nunique')
+            ).reset_index()
+            cat_agg['客单价'] = (cat_agg['销售额'] / cat_agg['订单数']).round(2)
+            if not cat_agg.empty:
+                tables_dict["品类分析汇总"] = cat_agg
+                summary_dfs.append(cat_agg)
+                sheet_names.append("品类分析汇总")
+
+            ch_agg = filtered_df.groupby('channel').agg(
+                销售额=('amount', 'sum'),
+                订单数=('order_id', 'count'),
+                用户数=('user_id', 'nunique')
+            ).reset_index()
+            if not ch_agg.empty:
+                tables_dict["渠道分析汇总"] = ch_agg
+                summary_dfs.append(ch_agg)
+                sheet_names.append("渠道分析汇总")
+
+            reg_agg = filtered_df.groupby('region').agg(
+                销售额=('amount', 'sum'),
+                订单数=('order_id', 'count'),
+                用户数=('user_id', 'nunique')
+            ).reset_index()
+            if not reg_agg.empty:
+                tables_dict["地区分析汇总"] = reg_agg
+                summary_dfs.append(reg_agg)
+                sheet_names.append("地区分析汇总")
+
+        html_report = generate_html_report(
+            "多维度分析", rep_title, rep_subtitle, kpi_dict,
+            figures_dict, tables_dict
+        )
+        excel_bytes = export_to_excel(
+            filtered_df, summary_dfs, sheet_names,
+            title=f"{rep_title} - {rep_subtitle}"
+        )
+        with st.popover("📥 导出报表", use_container_width=True):
+            get_download_buttons(
+                "多维度分析",
+                export_html_report(html_report),
+                excel_bytes,
+                start_date, end_date,
+                categories=category_selected if len(category_selected) < len(all_categories) else None
+            )
+    st.markdown('</div>', unsafe_allow_html=True)
 
 tab1, tab2, tab3 = st.tabs(["🏷️ 品类分析", "📱 渠道分析", "📍 地区分析"])
 
@@ -162,6 +284,7 @@ with tab1:
                 yaxis_showgrid=True, yaxis_gridcolor='#f1f5f9'
             )
             st.plotly_chart(fig_cat_bar, use_container_width=True)
+            figures_for_export.append(("品类销售额与订单量对比", fig_cat_bar))
 
         with col_cat2:
             if compare_mode and not prev_df.empty:
@@ -213,6 +336,7 @@ with tab1:
                     yaxis_showgrid=True, yaxis_gridcolor='#f1f5f9'
                 )
                 st.plotly_chart(fig_waterfall, use_container_width=True)
+                figures_for_export.append(("品类销售额环比瀑布图", fig_waterfall))
             else:
                 cat_agg_sorted = cat_agg.sort_values('客单价', ascending=True)
                 fig_aov = go.Figure(go.Bar(
@@ -240,6 +364,7 @@ with tab1:
                     xaxis_showgrid=True, xaxis_gridcolor='#f1f5f9'
                 )
                 st.plotly_chart(fig_aov, use_container_width=True)
+                figures_for_export.append(("各品类客单价对比", fig_aov))
 
         st.divider()
         st.markdown("#### 📋 品类明细数据")
@@ -248,6 +373,7 @@ with tab1:
         show_cat = show_cat.reset_index(drop=True)
         show_cat.index += 1
         st.dataframe(show_cat, use_container_width=True)
+        extra_sheets['品类分析汇总'] = show_cat
 
 with tab2:
     st.subheader("📱 渠道分析")
@@ -307,6 +433,7 @@ with tab2:
                 paper_bgcolor='white'
             )
             st.plotly_chart(fig_funnel, use_container_width=True)
+            figures_for_export.append(("渠道转化漏斗", fig_funnel))
 
         with ch_col2:
             ch_agg_roi = ch_agg.copy()
@@ -346,6 +473,7 @@ with tab2:
                 yaxis_showgrid=True, yaxis_gridcolor='#f1f5f9'
             )
             st.plotly_chart(fig_roi, use_container_width=True)
+            figures_for_export.append(("渠道ROI对比", fig_roi))
 
         st.divider()
         ch_col3, ch_col4 = st.columns(2)
@@ -376,6 +504,7 @@ with tab2:
                 xaxis_showgrid=True, xaxis_gridcolor='#f1f5f9'
             )
             st.plotly_chart(fig_ch_sales, use_container_width=True)
+            figures_for_export.append(("渠道销售额排名", fig_ch_sales))
 
         with ch_col4:
             fig_ch_scatter = px.scatter(
@@ -405,6 +534,7 @@ with tab2:
                 yaxis_showgrid=True, yaxis_gridcolor='#f1f5f9'
             )
             st.plotly_chart(fig_ch_scatter, use_container_width=True)
+            figures_for_export.append(("渠道效率矩阵散点图", fig_ch_scatter))
 
         st.divider()
         st.markdown("#### 📋 渠道明细数据")
@@ -413,6 +543,7 @@ with tab2:
         show_ch = show_ch.reset_index(drop=True)
         show_ch.index += 1
         st.dataframe(show_ch, use_container_width=True)
+        extra_sheets['渠道分析汇总'] = show_ch
 
 with tab3:
     st.subheader("📍 地区分析")
@@ -431,114 +562,4 @@ with tab3:
         r_m1.metric("🥇 销售TOP1地区", reg_agg.iloc[0]['region'],
                     delta=f"¥{reg_agg.iloc[0]['销售额']:,.0f}")
         r_m2.metric("🥈 销售TOP2地区", reg_agg.iloc[1]['region'] if len(reg_agg) > 1 else "-",
-                    delta=f"¥{reg_agg.iloc[1]['销售额']:,.0f}" if len(reg_agg) > 1 else "")
-        r_m3.metric("🥉 销售TOP3地区", reg_agg.iloc[2]['region'] if len(reg_agg) > 2 else "-",
-                    delta=f"¥{reg_agg.iloc[2]['销售额']:,.0f}" if len(reg_agg) > 2 else "")
-        r_m4.metric("🗺️ 覆盖地区数", len(reg_agg))
-
-        st.markdown("---")
-        r_col1, r_col2 = st.columns(2)
-
-        with r_col1:
-            reg_sorted = reg_agg.sort_values('销售额', ascending=True).tail(15)
-            fig_reg_rank = go.Figure()
-            fig_reg_rank.add_trace(go.Bar(
-                x=reg_sorted['销售额'],
-                y=reg_sorted['region'],
-                orientation='h',
-                marker=dict(
-                    color=reg_sorted['销售额'],
-                    colorscale='RdPu',
-                    showscale=True,
-                    colorbar=dict(title="销售额")
-                ),
-                text=reg_sorted['销售额'].apply(lambda x: f"¥{x:,.0f}"),
-                textposition='outside',
-                hovertemplate='地区: %{y}<br>销售额: ¥%{x:,.2f}<br>订单数: %{customdata}<extra></extra>',
-                customdata=reg_sorted['订单数']
-            ))
-            fig_reg_rank.update_layout(
-                title="各省份销售额排名（TOP 15）",
-                title_x=0.5,
-                xaxis_title="销售额 (¥)",
-                yaxis_title="地区",
-                height=500,
-                plot_bgcolor='white',
-                paper_bgcolor='white',
-                xaxis_showgrid=True, xaxis_gridcolor='#f1f5f9'
-            )
-            st.plotly_chart(fig_reg_rank, use_container_width=True)
-
-        with r_col2:
-            if compare_mode and not prev_df.empty:
-                prev_reg_agg = prev_df.groupby('region').agg(
-                    销售额=('amount', 'sum'),
-                    订单数=('order_id', 'count')
-                ).reset_index()
-
-                growth_df = reg_agg[['region', '销售额']].merge(
-                    prev_reg_agg[['region', '销售额']],
-                    on='region', how='outer', suffixes=('_curr', '_prev')
-                ).fillna(0)
-                growth_df['增长率'] = growth_df.apply(
-                    lambda x: calc_mom_growth(x['销售额_curr'], x['销售额_prev']) or 0,
-                    axis=1
-                )
-                growth_df = growth_df.sort_values('增长率', ascending=True)
-
-                fig_growth = go.Figure(go.Bar(
-                    x=growth_df['增长率'],
-                    y=growth_df['region'],
-                    orientation='h',
-                    marker_color=['#22c55e' if g >= 0 else '#ef4444' for g in growth_df['增长率']],
-                    text=growth_df['增长率'].apply(lambda x: f"{x:+.2f}%"),
-                    textposition='outside',
-                    hovertemplate='地区: %{y}<br>同比增长: %{x:+.2f}%<extra></extra>'
-                ))
-                fig_growth.add_vline(x=0, line_color="#94a3b8", line_width=2)
-                fig_growth.update_layout(
-                    title="地区销售额增速对比（环比）",
-                    title_x=0.5,
-                    xaxis_title="增长率 (%)",
-                    yaxis_title="地区",
-                    height=500,
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    xaxis_showgrid=True, xaxis_gridcolor='#f1f5f9'
-                )
-                st.plotly_chart(fig_growth, use_container_width=True)
-            else:
-                reg_aov = reg_agg.sort_values('客单价', ascending=True)
-                fig_reg_aov = go.Figure(go.Bar(
-                    x=reg_aov['客单价'],
-                    y=reg_aov['region'],
-                    orientation='h',
-                    marker=dict(
-                        color=reg_aov['客单价'],
-                        colorscale='Sunset',
-                        showscale=True,
-                        colorbar=dict(title="客单价")
-                    ),
-                    text=reg_aov['客单价'].apply(lambda x: f"¥{x:,.2f}"),
-                    textposition='outside',
-                    hovertemplate='地区: %{y}<br>客单价: ¥%{x:,.2f}<extra></extra>'
-                ))
-                fig_reg_aov.update_layout(
-                    title="各地区客单价对比",
-                    title_x=0.5,
-                    xaxis_title="客单价 (¥)",
-                    yaxis_title="地区",
-                    height=500,
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    xaxis_showgrid=True, xaxis_gridcolor='#f1f5f9'
-                )
-                st.plotly_chart(fig_reg_aov, use_container_width=True)
-
-        st.divider()
-        st.markdown("#### 📋 地区明细数据")
-        show_reg = reg_agg.copy()
-        show_reg.columns = ['地区', '销售额(¥)', '订单数', '用户数', '客单价(¥)']
-        show_reg = show_reg.reset_index(drop=True)
-        show_reg.index += 1
-        st.dataframe(show_reg, use_container_width=True)
+                    delta=f"¥{reg_agg.iloc[1]['销售额']:,.0f}" if len(reg_agg) >

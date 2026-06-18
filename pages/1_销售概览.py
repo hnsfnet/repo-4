@@ -12,6 +12,7 @@ from utils.data_loader import (
     filter_by_time, get_kpi_metrics, aggregate_sales_by_time,
     get_data_overview
 )
+from utils.exporter import get_report_title, export_to_excel, generate_html_report, export_html_report, get_download_buttons
 
 st.set_page_config(
     page_title="销售概览 - 数析坊",
@@ -80,15 +81,128 @@ with st.sidebar:
         max_value=max_dt,
         key="page_date_range"
     )
+    st.divider()
+    st.subheader("🏷️ 品类筛选")
+    all_categories = sorted(cleaned_df['product_category'].unique())
+    selected_categories = st.multiselect(
+        "选择分析品类",
+        options=all_categories,
+        default=all_categories,
+        key="overview_category_filter"
+    )
+
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start_date, end_date = date_range
     else:
         start_date, end_date = min_dt, max_dt
 
-filtered_df = filter_by_time(cleaned_df, start_date, end_date)
+time_filtered = filter_by_time(cleaned_df, start_date, end_date)
+if selected_categories:
+    time_filtered = time_filtered[time_filtered['product_category'].isin(selected_categories)]
+filtered_df = time_filtered
 kpi = get_kpi_metrics(filtered_df, full_df)
 
 st.info(f"📅 当前分析区间：**{start_date.strftime('%Y-%m-%d')}** 至 **{end_date.strftime('%Y-%m-%d')}** | 共 **{len(filtered_df):,}** 条订单")
+if selected_categories and len(selected_categories) < len(all_categories):
+    st.caption(f"🏷️ 已选品类：{', '.join(selected_categories)}")
+
+with st.container():
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); padding: 1rem; border-radius: 10px; border: 1px solid #7dd3fc; margin-bottom: 1.5rem;">
+    """, unsafe_allow_html=True)
+    col_title, col_exp = st.columns([3, 1])
+    with col_title:
+        st.subheader("📤 报表导出")
+        st.caption("导出当前页面的图表与数据，包含筛选条件")
+    with col_exp:
+        rep_title, rep_subtitle = get_report_title(
+            "销售概览", start_date, end_date,
+            categories=selected_categories if len(selected_categories) < len(all_categories) else None
+        )
+        kpi_dict = {}
+        figures_dict = {}
+        tables_dict = {}
+        summary_dfs = []
+        sheet_names = []
+        cat_sales_exp = pd.DataFrame()
+        region_sales_exp = pd.DataFrame()
+        trend_df = pd.DataFrame()
+
+        if not filtered_df.empty:
+            kpi_dict = {
+                "总销售额": f"¥{kpi['total_sales']:,.0f}",
+                "总订单数": f"{kpi['total_orders']:,} 单",
+                "客单价": f"¥{kpi['avg_order_value']:,.2f}",
+                "销售额环比": f"{kpi['sales_mom']:+.2f}%" if kpi['sales_mom'] is not None else "-"
+            }
+
+            if 'freq' not in st.session_state:
+                st.session_state.freq = 'D'
+            freq = st.session_state.get('freq', 'D')
+            trend_df = aggregate_sales_by_time(filtered_df, freq)
+            if not trend_df.empty:
+                freq_label_map = {"D": "日", "W": "周", "M": "月"}
+                freq_label = freq_label_map.get(freq, "日")
+                fig_trend_exp = go.Figure()
+                fig_trend_exp.add_trace(go.Scatter(
+                    x=trend_df.iloc[:, 0],
+                    y=trend_df['销售额'],
+                    mode='lines+markers',
+                    line=dict(color='#6366f1', width=3),
+                    marker=dict(size=7, color='#6366f1'),
+                    fill='tozeroy',
+                    fillcolor='rgba(99, 102, 241, 0.1)'
+                ))
+                fig_trend_exp.update_layout(
+                    title=f"销售额趋势（按{freq_label}）",
+                    title_x=0.5, height=420
+                )
+                figures_dict["销售额趋势"] = fig_trend_exp
+                tables_dict["销售额趋势数据"] = trend_df
+                summary_dfs.append(trend_df)
+                sheet_names.append("销售额趋势")
+
+            cat_sales_exp = filtered_df.groupby('product_category').agg(
+                销售额=('amount', 'sum'),
+                订单数=('order_id', 'count')
+            ).reset_index()
+            if not cat_sales_exp.empty:
+                fig_pie_exp = px.pie(
+                    cat_sales_exp, values='销售额', names='product_category',
+                    hole=0.45, title='品类销售占比'
+                )
+                figures_dict["品类销售占比"] = fig_pie_exp
+                tables_dict["品类销售汇总"] = cat_sales_exp
+                summary_dfs.append(cat_sales_exp)
+                sheet_names.append("品类销售汇总")
+
+            region_sales_exp = filtered_df.groupby('region').agg(
+                销售额=('amount', 'sum'),
+                订单数=('order_id', 'count')
+            ).reset_index()
+            if not region_sales_exp.empty:
+                tables_dict["地区销售汇总"] = region_sales_exp
+                summary_dfs.append(region_sales_exp)
+                sheet_names.append("地区销售汇总")
+
+        html_report = generate_html_report(
+            "销售概览", rep_title, rep_subtitle, kpi_dict,
+            figures_dict, tables_dict
+        )
+        excel_bytes = export_to_excel(
+            filtered_df, summary_dfs, sheet_names,
+            title=f"{rep_title} - {rep_subtitle}"
+        )
+
+        with st.popover("📥 导出报表", use_container_width=True):
+            get_download_buttons(
+                "销售概览",
+                export_html_report(html_report),
+                excel_bytes,
+                start_date, end_date,
+                categories=selected_categories if len(selected_categories) < len(all_categories) else None
+            )
+    st.markdown('</div>', unsafe_allow_html=True)
 
 st.subheader("🎯 核心指标")
 
@@ -129,6 +243,7 @@ with t_col1:
     )
     freq_map = {"日": "D", "周": "W", "月": "M"}
     freq = freq_map[freq_label]
+    st.session_state.freq = freq
 
 trend_df = aggregate_sales_by_time(filtered_df, freq)
 

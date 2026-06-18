@@ -95,8 +95,21 @@ def get_data_overview(df):
 def filter_by_time(df, start_date, end_date):
     if df is None or df.empty:
         return df
+    if start_date is None or end_date is None:
+        return df
     mask = (df['order_time'].dt.date >= start_date) & (df['order_time'].dt.date <= end_date)
     return df[mask]
+
+
+def apply_all_filters(df, start_date, end_date, categories=None):
+    if df is None or df.empty:
+        return df
+    result = filter_by_time(df, start_date, end_date)
+    if categories and len(categories) > 0:
+        all_cats = df['product_category'].dropna().unique().tolist()
+        if set(categories) != set(all_cats):
+            result = result[result['product_category'].isin(categories)]
+    return result
 
 
 def calc_mom_growth(current, previous):

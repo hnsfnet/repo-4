@@ -1,6 +1,7 @@
 import pandas as pd
 import io
 import base64
+import time
 from datetime import datetime
 from jinja2 import Template
 
@@ -39,9 +40,31 @@ def export_to_excel(raw_df, summary_dfs, sheet_names, title="数据分析报告"
     return output.getvalue()
 
 
-def fig_to_base64(fig):
+def _is_blank_image(img_bytes):
+    if img_bytes is None or len(img_bytes) < 1000:
+        return True
+    return len(img_bytes) < 5000
+
+
+def fig_to_base64(fig, max_retries=3, retry_delay=0.5):
+    if fig is None:
+        return None
     try:
-        img_bytes = fig.to_image(format='png', width=1000, height=500, scale=2)
+        fig.update_layout(autosize=True)
+        for attempt in range(max_retries):
+            try:
+                img_bytes = fig.to_image(
+                    format='png', width=1200, height=600, scale=2,
+                    engine='kaleido'
+                )
+            except ValueError:
+                img_bytes = fig.to_image(
+                    format='png', width=1200, height=600, scale=2
+                )
+            if not _is_blank_image(img_bytes):
+                return base64.b64encode(img_bytes).decode('utf-8')
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
         return base64.b64encode(img_bytes).decode('utf-8')
     except Exception:
         return None

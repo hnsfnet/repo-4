@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.data_loader import (
     filter_by_time, get_kpi_metrics, aggregate_sales_by_time,
-    get_data_overview
+    get_data_overview, apply_all_filters
 )
 from utils.exporter import get_report_title, export_to_excel, generate_html_report, export_html_report, get_download_buttons
 
@@ -99,7 +99,8 @@ with st.sidebar:
 time_filtered = filter_by_time(cleaned_df, start_date, end_date)
 if selected_categories:
     time_filtered = time_filtered[time_filtered['product_category'].isin(selected_categories)]
-filtered_df = time_filtered
+filtered_df = apply_all_filters(cleaned_df, start_date, end_date, selected_categories)
+st.session_state.filtered_df = filtered_df
 kpi = get_kpi_metrics(filtered_df, full_df)
 
 st.info(f"📅 当前分析区间：**{start_date.strftime('%Y-%m-%d')}** 至 **{end_date.strftime('%Y-%m-%d')}** | 共 **{len(filtered_df):,}** 条订单")

@@ -9,7 +9,7 @@ from datetime import timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.data_loader import (
-    filter_by_time, get_kpi_metrics, calc_mom_growth
+    filter_by_time, get_kpi_metrics, calc_mom_growth, apply_all_filters
 )
 from utils.exporter import get_report_title, export_to_excel, generate_html_report, export_html_report, get_download_buttons
 
@@ -120,7 +120,8 @@ with st.sidebar:
 time_filtered = filter_by_time(cleaned_df, start_date, end_date)
 if category_selected:
     time_filtered = time_filtered[time_filtered['product_category'].isin(category_selected)]
-filtered_df = time_filtered
+filtered_df = apply_all_filters(cleaned_df, start_date, end_date, category_selected)
+st.session_state.filtered_df = filtered_df
 st.session_state.start_date = start_date
 st.session_state.end_date = end_date
 
@@ -222,6 +223,9 @@ with st.container():
     st.markdown('</div>', unsafe_allow_html=True)
 
 tab1, tab2, tab3 = st.tabs(["🏷️ 品类分析", "📱 渠道分析", "📍 地区分析"])
+
+figures_for_export = []
+extra_sheets = {}
 
 with tab1:
     st.subheader("🏷️ 品类分析")

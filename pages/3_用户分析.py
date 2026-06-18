@@ -8,8 +8,8 @@ from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.data_loader import filter_by_time
-from utils.analytics import calculate_rfm, calculate_retention, get_user_level_orders
+from utils.data_loader import filter_by_time, apply_all_filters
+from utils.analytics import calculate_rfm, calculate_retention, get_user_level_orders, sample_rfm_for_display
 from utils.exporter import get_report_title, export_to_excel, generate_html_report, export_html_report, get_download_buttons
 
 st.set_page_config(
@@ -116,7 +116,8 @@ time_filtered = filter_by_time(cleaned_df, start_date, end_date)
 if selected_categories:
     time_filtered = time_filtered[time_filtered['product_category'].isin(selected_categories)]
 
-filtered_df = time_filtered
+filtered_df = apply_all_filters(cleaned_df, start_date, end_date, selected_categories)
+st.session_state.filtered_df = filtered_df
 
 st.info(f"📅 当前分析区间：**{start_date.strftime('%Y-%m-%d')}** 至 **{end_date.strftime('%Y-%m-%d')}** | 共 **{len(filtered_df):,}** 条订单")
 if selected_categories and len(selected_categories) < len(all_categories):
@@ -170,8 +171,9 @@ with st.container():
             sheet_names.append("用户等级统计")
 
         if not rfm_df.empty:
+            rfm_display, was_sampled = sample_rfm_for_display(rfm_df)
             fig_rfm_scatter = px.scatter_3d(
-                rfm_df,
+                rfm_display,
                 x='Recency',
                 y='Frequency',
                 z='Monetary',
@@ -309,8 +311,9 @@ with tab1:
                 st.plotly_chart(fig_level_pie, use_container_width=True)
 
             with c2:
+                rfm_plot_df, rfm_was_sampled = sample_rfm_for_display(rfm_df)
                 fig_rfm_scatter = px.scatter_3d(
-                    rfm_df,
+                    rfm_plot_df,
                     x='Recency',
                     y='Frequency',
                     z='Monetary',
@@ -327,8 +330,11 @@ with tab1:
                     opacity=0.7,
                     size_max=8
                 )
+                scatter_title = "RFM 三维分布（点击图例可筛选）"
+                if rfm_was_sampled:
+                    scatter_title += f" — 采样展示 {len(rfm_plot_df):,}/{len(rfm_df):,} 条"
                 fig_rfm_scatter.update_layout(
-                    title="RFM 三维分布（点击图例可筛选）",
+                    title=scatter_title,
                     title_x=0.5,
                     scene=dict(
                         xaxis_title='最近购买 (天)',

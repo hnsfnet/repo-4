@@ -9,10 +9,15 @@ from utils.data_loader import (
     load_raw_data, clean_data, detect_missing_values, detect_outliers,
     get_data_overview
 )
+from utils.config import get as cfg
+
+app_name = cfg('app.name', '数析坊')
+app_subtitle = cfg('app.subtitle', '电商数据分析看板 · 数据驱动决策')
+app_icon = cfg('app.icon', '📊')
 
 st.set_page_config(
-    page_title="数析坊 - 电商数据分析看板",
-    page_icon="📊",
+    page_title=f"{app_name} - 电商数据分析看板",
+    page_icon=app_icon,
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -38,8 +43,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 数析坊")
-st.caption("电商数据分析看板 · 数据驱动决策")
+st.title(f"{app_icon} {app_name}")
+st.caption(app_subtitle)
 
 with st.spinner("正在加载并清洗数据..."):
     if 'raw_data' not in st.session_state:
@@ -139,11 +144,13 @@ with tab1:
     - **数据清洗引擎**：自动检测并处理缺失值、异常值、重复值
     - **销售概览看板**：核心KPI、趋势分析、品类&地区分布
     - **多维度分析**：品类、渠道、地区三大维度深度剖析
+    - **用户行为分析**：RFM用户价值分析、留存分析
 
     ### 技术栈
     - 🐍 Python + Pandas：数据处理与分析
     - 🚀 Streamlit：交互式Web框架
     - 📈 Plotly：交互式可视化图表
+    - 🏗️ 分层架构：Service层 + 图表组件 + FilterManager
     """)
 
 with tab2:
@@ -153,7 +160,7 @@ with tab2:
     st.dataframe(st.session_state.clean_data.head(20), hide_index=True, use_container_width=True)
 
 with tab3:
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("### 📊 [销售概览看板](销售概览)")
         st.caption("""
@@ -168,4 +175,11 @@ with tab3:
         - 品类分析：销售额/订单量对比、环比变化瀑布图
         - 渠道分析：转化漏斗、ROI对比
         - 地区分析：各省排名、增速对比
+        """)
+    with col3:
+        st.markdown("### 👥 [用户分析](用户分析)")
+        st.caption("""
+        - RFM 用户价值分析（三维散点图、等级下钻）
+        - 用户留存分析（留存热力图）
+        - 报表导出（HTML + Excel）
         """)

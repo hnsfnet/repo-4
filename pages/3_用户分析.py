@@ -2,15 +2,14 @@ import streamlit as st
 import sys
 import os
 import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.data_loader import filter_by_time, apply_all_filters
-from utils.analytics import calculate_rfm, calculate_retention, get_user_level_orders, sample_rfm_for_display
+from utils.filter_manager import FilterManager
+from services.user_service import UserService
 from utils.exporter import get_report_title, export_to_excel, generate_html_report, export_html_report, get_download_buttons
+from charts.chart_components import BarChart, PieChart, HeatmapChart, Scatter3DChart
+from utils.config import get as cfg
 
 st.set_page_config(
     page_title="用户分析 - 数析坊",
@@ -26,9 +25,7 @@ st.markdown("""
                  box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
     .export-area {
         background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
-        padding: 1rem;
-        border-radius: 10px;
-        border: 1px solid #7dd3fc;
+        padding: 1rem; border-radius: 10px; border: 1px solid #7dd3fc;
         margin-bottom: 1.5rem;
     }
     </style>
@@ -40,104 +37,41 @@ if 'clean_data' not in st.session_state:
     st.warning("⚠️ 数据尚未加载，请先返回首页加载数据")
     st.stop()
 
-cleaned_df = st.session_state.clean_data
-full_df = cleaned_df.copy()
+FilterManager.init_session_defaults(st.session_state.overview)
+filters = FilterManager.render_sidebar("user", show_rfm_date=True)
+filtered_df = FilterManager.get_filtered_df(filters['start_date'], filters['end_date'], filters['categories'])
 
-if 'start_date' not in st.session_state:
-    ov = st.session_state.overview
-    st.session_state.start_date = ov['起始日期'].date()
-    st.session_state.end_date = ov['结束日期'].date()
+start_date = filters['start_date']
+end_date = filters['end_date']
+selected_categories = filters['categories']
+all_categories = filters['all_categories']
+rfm_analysis_date = filters['rfm_analysis_date']
 
-with st.sidebar:
-    st.header("📋 数据概览")
-    ov = st.session_state.overview
-    st.metric("总行数", f"{ov['总行数']:,}")
-    st.metric("时间范围", ov['时间范围'])
-    st.divider()
-
-    st.subheader("📅 时间范围筛选")
-    min_dt = ov['起始日期'].date()
-    max_dt = ov['结束日期'].date()
-
-    preset = st.selectbox(
-        "快捷选择",
-        options=["全部时间", "最近7天", "最近30天", "最近90天", "最近半年", "自定义"],
-        index=5,
-        key="user_preset"
-    )
-    if preset == "最近7天":
-        sd, ed = max_dt - timedelta(days=7), max_dt
-    elif preset == "最近30天":
-        sd, ed = max_dt - timedelta(days=30), max_dt
-    elif preset == "最近90天":
-        sd, ed = max_dt - timedelta(days=90), max_dt
-    elif preset == "最近半年":
-        sd, ed = max_dt - timedelta(days=180), max_dt
-    elif preset == "全部时间":
-        sd, ed = min_dt, max_dt
-    else:
-        sd = st.session_state.start_date
-        ed = st.session_state.end_date
-
-    date_range = st.date_input(
-        "分析时间范围",
-        value=(sd, ed),
-        min_value=min_dt,
-        max_value=max_dt,
-        key="user_date_range"
-    )
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start_date, end_date = date_range
-    else:
-        start_date, end_date = min_dt, max_dt
-
-    st.divider()
-    st.subheader("🏷️ 品类筛选")
-    all_categories = sorted(cleaned_df['product_category'].unique())
-    selected_categories = st.multiselect(
-        "选择分析品类",
-        options=all_categories,
-        default=all_categories,
-        key="user_category_filter"
-    )
-
-    st.divider()
-    st.subheader("🎯 RFM 参数")
-    rfm_analysis_date = st.date_input(
-        "RFM 分析日期",
-        value=end_date,
-        min_value=min_dt,
-        max_value=max_dt + timedelta(days=30),
-        key="rfm_analysis_date"
-    )
-
-time_filtered = filter_by_time(cleaned_df, start_date, end_date)
-
-if selected_categories:
-    time_filtered = time_filtered[time_filtered['product_category'].isin(selected_categories)]
-
-filtered_df = apply_all_filters(cleaned_df, start_date, end_date, selected_categories)
-st.session_state.filtered_df = filtered_df
+svc = UserService(filtered_df, rfm_analysis_date)
 
 st.info(f"📅 当前分析区间：**{start_date.strftime('%Y-%m-%d')}** 至 **{end_date.strftime('%Y-%m-%d')}** | 共 **{len(filtered_df):,}** 条订单")
-if selected_categories and len(selected_categories) < len(all_categories):
+if len(selected_categories) < len(all_categories):
     st.caption(f"🏷️ 已选品类：{', '.join(selected_categories)}")
 
 with st.container():
-    st.markdown('<div class="export-area">', unsafe_allow_html=True)
+    gradient_start = cfg('theme.colors.gradient_start', '#f0f9ff')
+    gradient_end = cfg('theme.colors.gradient_end', '#e0f2fe')
+    gradient_border = cfg('theme.colors.gradient_border', '#7dd3fc')
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, {gradient_start} 0%, {gradient_end} 100%); padding: 1rem; border-radius: 10px; border: 1px solid {gradient_border}; margin-bottom: 1.5rem;">
+    """, unsafe_allow_html=True)
     col_title, col_exp = st.columns([3, 1])
     with col_title:
         st.subheader("📤 报表导出")
         st.caption("导出当前页面的图表与数据，包含筛选条件")
     with col_exp:
-        rfm_df, level_stats = calculate_rfm(filtered_df, rfm_analysis_date)
-        retention_df, cohort_df = calculate_retention(filtered_df)
+        rfm_df, level_stats = svc.get_rfm()
+        retention_df, cohort_df = svc.get_retention()
 
         rep_title, rep_subtitle = get_report_title(
             "用户分析", start_date, end_date,
             categories=selected_categories if len(selected_categories) < len(all_categories) else None
         )
-
         kpi_dict = {}
         figures_dict = {}
         tables_dict = {}
@@ -156,73 +90,42 @@ with st.container():
             }
 
         if not level_stats.empty:
-            fig_level = go.Figure()
-            fig_level.add_trace(go.Bar(
-                x=level_stats['用户等级'],
-                y=level_stats['用户数'],
-                marker_color=['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#94a3b8'],
-                text=level_stats.apply(lambda x: f"{x['用户数']}人<br>{x['用户占比(%)']}%", axis=1),
+            level_order = ['高价值用户', '潜力用户', '流失预警', '沉睡用户', '普通用户']
+            level_colors_map = cfg('theme.colors.level_colors', {})
+            plot_levels = [l for l in level_order if l in level_stats['用户等级'].values]
+            plot_colors = [level_colors_map.get(l, '#94a3b8') for l in plot_levels]
+
+            fig_level = BarChart("用户等级分布", height=380)
+            fig_level.fig.add_trace(__import__('plotly.graph_objects', fromlist=['Bar']).Bar(
+                x=plot_levels,
+                y=[level_stats[level_stats['用户等级'] == l]['用户数'].values[0] for l in plot_levels],
+                marker_color=plot_colors,
+                text=[f"{level_stats[level_stats['用户等级'] == l]['用户数'].values[0]}人"
+                      for l in plot_levels],
                 hovertemplate='等级: %{x}<br>用户数: %{y} 人<extra></extra>'
             ))
-            fig_level.update_layout(title="用户等级分布", title_x=0.5, height=380)
-            figures_dict["用户等级分布"] = fig_level
+            figures_dict["用户等级分布"] = fig_level.fig
             tables_dict["用户等级统计"] = level_stats
             summary_dfs.append(level_stats)
             sheet_names.append("用户等级统计")
 
         if not rfm_df.empty:
-            rfm_display, was_sampled = sample_rfm_for_display(rfm_df)
-            fig_rfm_scatter = px.scatter_3d(
-                rfm_display,
-                x='Recency',
-                y='Frequency',
-                z='Monetary',
-                color='用户等级',
-                color_discrete_map={
-                    '高价值用户': '#22c55e',
-                    '潜力用户': '#3b82f6',
-                    '流失预警': '#f59e0b',
-                    '沉睡用户': '#ef4444',
-                    '普通用户': '#94a3b8'
-                },
-                hover_data=['user_id', 'RFM_Score'],
-                opacity=0.7,
-                size_max=8
+            rfm_display, _ = UserService.sample_rfm_for_display(rfm_df)
+            fig_rfm = Scatter3DChart("RFM 三维分布", height=500)
+            fig_rfm.add_scatter_3d(
+                rfm_display, 'Recency', 'Frequency', 'Monetary',
+                color_col='用户等级',
+                hover_data={'user_id': True, 'RFM_Score': True}
             )
-            fig_rfm_scatter.update_layout(
-                title="RFM 三维分布",
-                title_x=0.5,
-                scene=dict(
-                    xaxis_title='最近购买(天)',
-                    yaxis_title='购买频次',
-                    zaxis_title='消费金额(¥)'
-                ),
-                height=500
-            )
-            figures_dict["RFM 三维分布"] = fig_rfm_scatter
+            figures_dict["RFM 三维分布"] = fig_rfm.fig
             tables_dict["用户 RFM 明细"] = rfm_df
             summary_dfs.append(rfm_df)
             sheet_names.append("RFM明细")
 
         if not retention_df.empty:
-            fig_heatmap = go.Figure(data=go.Heatmap(
-                z=retention_df.values,
-                x=retention_df.columns,
-                y=retention_df.index,
-                colorscale='Blues',
-                text=retention_df.values,
-                texttemplate='%{text:.1f}%',
-                hovertemplate='首次购买: %{y}<br>第 %{x} 月<br>留存率: %{z:.1f}%<extra></extra>',
-                colorbar=dict(title="留存率(%)")
-            ))
-            fig_heatmap.update_layout(
-                title="用户留存率热力图",
-                title_x=0.5,
-                xaxis_title="后续月份",
-                yaxis_title="首次购买月份",
-                height=450
-            )
-            figures_dict["用户留存热力图"] = fig_heatmap
+            fig_heatmap = HeatmapChart("用户留存率热力图", height=450)
+            fig_heatmap.add_heatmap_from_df(retention_df, colorbar_title="留存率(%)")
+            figures_dict["用户留存热力图"] = fig_heatmap.fig
             tables_dict["留存率矩阵"] = retention_df
             tables_dict["用户规模矩阵"] = cohort_df
             summary_dfs.append(retention_df)
@@ -231,19 +134,15 @@ with st.container():
             sheet_names.append("用户规模矩阵")
 
         html_report = generate_html_report(
-            "用户分析", rep_title, rep_subtitle, kpi_dict,
-            figures_dict, tables_dict
+            "用户分析", rep_title, rep_subtitle, kpi_dict, figures_dict, tables_dict
         )
         excel_bytes = export_to_excel(
             filtered_df, summary_dfs, sheet_names,
             title=f"{rep_title} - {rep_subtitle}"
         )
-
         with st.popover("📥 导出报表", use_container_width=True):
             get_download_buttons(
-                "用户分析",
-                export_html_report(html_report),
-                excel_bytes,
+                "用户分析", export_html_report(html_report), excel_bytes,
                 start_date, end_date,
                 categories=selected_categories if len(selected_categories) < len(all_categories) else None
             )
@@ -253,11 +152,13 @@ tab1, tab2 = st.tabs(["📊 RFM 分析", "🔥 用户留存分析"])
 
 with tab1:
     st.subheader("📊 RFM 用户价值分析")
-
     if filtered_df.empty:
         st.warning("所选时间段内无数据")
     else:
-        rfm_df, level_stats = calculate_rfm(filtered_df, rfm_analysis_date)
+        rfm_df, level_stats = svc.get_rfm()
+        level_order = ['高价值用户', '潜力用户', '流失预警', '沉睡用户', '普通用户']
+        level_colors_map = cfg('theme.colors.level_colors', {})
+        level_colors = [level_colors_map.get(l, '#94a3b8') for l in level_order]
 
         if not level_stats.empty:
             m1, m2, m3, m4 = st.columns(4)
@@ -270,81 +171,43 @@ with tab1:
                       f"{level_stats[level_stats['用户等级'] == '沉睡用户']['用户数'].sum():,} 人" if '沉睡用户' in level_stats['用户等级'].values else "0 人")
 
             st.divider()
-
             c1, c2 = st.columns([1, 1.5])
 
             with c1:
-                fig_level = go.Figure()
-                level_order = ['高价值用户', '潜力用户', '流失预警', '沉睡用户', '普通用户']
-                level_colors = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#94a3b8']
                 plot_levels = [l for l in level_order if l in level_stats['用户等级'].values]
                 plot_colors = [level_colors[level_order.index(l)] for l in plot_levels]
 
-                fig_level.add_trace(go.Bar(
+                fig_level = BarChart("各等级用户数量分布", height=380)
+                fig_level.fig.add_trace(__import__('plotly.graph_objects', fromlist=['Bar']).Bar(
                     x=plot_levels,
                     y=[level_stats[level_stats['用户等级'] == l]['用户数'].values[0] for l in plot_levels],
                     marker_color=plot_colors,
-                    text=[f"{level_stats[level_stats['用户等级'] == l]['用户数'].values[0]} 人<br>{level_stats[level_stats['用户等级'] == l]['用户占比(%)'].values[0]}%" for l in plot_levels],
+                    text=[f"{level_stats[level_stats['用户等级'] == l]['用户数'].values[0]} 人<br>{level_stats[level_stats['用户等级'] == l]['用户占比(%)'].values[0]}%"
+                          for l in plot_levels],
                     hovertemplate='等级: %{x}<br>用户数: %{y} 人<extra></extra>'
                 ))
-                fig_level.update_layout(
-                    title="各等级用户数量分布",
-                    title_x=0.5,
-                    height=380,
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    yaxis_showgrid=True, yaxis_gridcolor='#f1f5f9'
-                )
-                st.plotly_chart(fig_level, use_container_width=True)
+                fig_level.render()
 
-                fig_level_pie = px.pie(
-                    level_stats,
-                    values='消费占比(%)',
-                    names='用户等级',
-                    color='用户等级',
-                    color_discrete_map=dict(zip(level_order, level_colors)),
-                    hole=0.45,
-                    title='各等级消费贡献占比'
-                )
-                fig_level_pie.update_traces(textposition='inside', textinfo='label+percent')
-                fig_level_pie.update_layout(height=380, title_x=0.5)
-                st.plotly_chart(fig_level_pie, use_container_width=True)
+                PieChart('各等级消费贡献占比', height=380).add_pie(
+                    labels=level_stats['用户等级'],
+                    values=level_stats['消费占比(%)'],
+                    color_map=[level_colors_map.get(l, '#94a3b8') for l in level_stats['用户等级']]
+                ).render()
 
             with c2:
-                rfm_plot_df, rfm_was_sampled = sample_rfm_for_display(rfm_df)
-                fig_rfm_scatter = px.scatter_3d(
-                    rfm_plot_df,
-                    x='Recency',
-                    y='Frequency',
-                    z='Monetary',
-                    color='用户等级',
-                    color_discrete_map=dict(zip(level_order, level_colors)),
-                    hover_data={
-                        'user_id': True,
-                        'Recency': ':,.0f',
-                        'Frequency': ':,.0f',
-                        'Monetary': ':,.2f',
-                        'RFM_Score': True,
-                        '用户等级': True
-                    },
-                    opacity=0.7,
-                    size_max=8
-                )
+                rfm_plot_df, rfm_was_sampled = UserService.sample_rfm_for_display(rfm_df)
                 scatter_title = "RFM 三维分布（点击图例可筛选）"
                 if rfm_was_sampled:
                     scatter_title += f" — 采样展示 {len(rfm_plot_df):,}/{len(rfm_df):,} 条"
-                fig_rfm_scatter.update_layout(
-                    title=scatter_title,
-                    title_x=0.5,
-                    scene=dict(
-                        xaxis_title='最近购买 (天)',
-                        yaxis_title='购买频次 (次)',
-                        zaxis_title='消费金额 (¥)'
-                    ),
-                    height=780,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
-                )
-                st.plotly_chart(fig_rfm_scatter, use_container_width=True)
+                Scatter3DChart(scatter_title, height=780).add_scatter_3d(
+                    rfm_plot_df, 'Recency', 'Frequency', 'Monetary',
+                    color_col='用户等级',
+                    hover_data={
+                        'user_id': True, 'Recency': ':,.0f',
+                        'Frequency': ':,.0f', 'Monetary': ':,.2f',
+                        'RFM_Score': True, '用户等级': True
+                    }
+                ).render(x_title='最近购买 (天)', y_title='购买频次 (次)', z_title='消费金额 (¥)')
 
             st.divider()
             st.subheader("🔍 等级下钻")
@@ -355,7 +218,7 @@ with tab1:
             )
 
             if selected_level:
-                level_orders = get_user_level_orders(filtered_df, rfm_df, selected_level)
+                level_orders = svc.get_user_level_orders(rfm_df, selected_level)
                 level_users = rfm_df[rfm_df['用户等级'] == selected_level]
 
                 sc1, sc2, sc3, sc4 = st.columns(4)
@@ -365,11 +228,7 @@ with tab1:
                 sc4.metric("平均频次", f"{level_users['Frequency'].mean():.1f} 次")
 
                 st.markdown(f"#### 📋 {selected_level} - 订单明细（TOP 50）")
-                st.dataframe(
-                    level_orders.head(50),
-                    hide_index=True,
-                    use_container_width=True
-                )
+                st.dataframe(level_orders.head(50), hide_index=True, use_container_width=True)
 
             st.divider()
             st.markdown("#### 📑 RFM 评分明细")
@@ -382,11 +241,10 @@ with tab1:
 
 with tab2:
     st.subheader("🔥 用户留存分析")
-
     if filtered_df.empty:
         st.warning("所选时间段内无数据")
     else:
-        retention_df, cohort_df = calculate_retention(filtered_df)
+        retention_df, cohort_df = svc.get_retention()
 
         if retention_df.empty or cohort_df.empty:
             st.info("⚠️ 当前数据不足以计算留存率，请扩大时间范围或更换筛选条件")
@@ -402,48 +260,14 @@ with tab2:
             rc1, rc2 = st.columns(2)
 
             with rc1:
-                fig_heatmap = go.Figure(data=go.Heatmap(
-                    z=retention_df.values,
-                    x=[f"第{c}月" for c in retention_df.columns],
-                    y=retention_df.index,
-                    colorscale='Blues',
-                    text=retention_df.values,
-                    texttemplate='%{text:.1f}%',
-                    hovertemplate='首次购买: %{y}<br>时间: %{x}<br>留存率: %{z:.1f}%<extra></extra>',
-                    colorbar=dict(title="留存率(%)")
-                ))
-                fig_heatmap.update_layout(
-                    title="用户留存率热力图",
-                    title_x=0.5,
-                    xaxis_title="首次购买后的时间",
-                    yaxis_title="首次购买月份",
-                    height=500,
-                    plot_bgcolor='white',
-                    paper_bgcolor='white'
-                )
-                st.plotly_chart(fig_heatmap, use_container_width=True)
+                HeatmapChart("用户留存率热力图", height=500, colorscale='Blues').add_heatmap_from_df(
+                    retention_df, colorbar_title="留存率(%)"
+                ).render(x_title="首次购买后的时间", y_title="首次购买月份")
 
             with rc2:
-                fig_cohort = go.Figure(data=go.Heatmap(
-                    z=cohort_df.values,
-                    x=[f"第{c}月" for c in cohort_df.columns],
-                    y=cohort_df.index,
-                    colorscale='Greens',
-                    text=cohort_df.values,
-                    texttemplate='%{text}',
-                    hovertemplate='首次购买: %{y}<br>时间: %{x}<br>活跃用户: %{text} 人<extra></extra>',
-                    colorbar=dict(title="用户数")
-                ))
-                fig_cohort.update_layout(
-                    title="各月活跃用户规模",
-                    title_x=0.5,
-                    xaxis_title="首次购买后的时间",
-                    yaxis_title="首次购买月份",
-                    height=500,
-                    plot_bgcolor='white',
-                    paper_bgcolor='white'
-                )
-                st.plotly_chart(fig_cohort, use_container_width=True)
+                HeatmapChart("各月活跃用户规模", height=500, colorscale='Greens').add_heatmap_from_df(
+                    cohort_df, colorbar_title="用户数"
+                ).render(x_title="首次购买后的时间", y_title="首次购买月份")
 
             st.divider()
             st.markdown("#### 📋 留存率数据明细")

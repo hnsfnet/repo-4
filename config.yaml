@@ -1,0 +1,98 @@
+app:
+  name: "数析坊"
+  subtitle: "电商数据分析看板 · 数据驱动决策"
+  icon: "📊"
+  layout: "wide"
+
+data:
+  source_dir: "data"
+  source_file: "orders.csv"
+  encoding: "utf-8-sig"
+  required_columns:
+    - order_id
+    - user_id
+    - product_category
+    - amount
+    - quantity
+    - order_time
+    - region
+    - channel
+  outlier_threshold: 3
+  sample_threshold: 10000
+  sample_size: 10000
+
+theme:
+  colors:
+    primary: "#6366f1"
+    success: "#22c55e"
+    warning: "#f59e0b"
+    danger: "#ef4444"
+    info: "#3b82f6"
+    muted: "#94a3b8"
+    series:
+      - "#6366f1"
+      - "#22c55e"
+      - "#f59e0b"
+      - "#ef4444"
+      - "#8b5cf6"
+      - "#ec4899"
+      - "#14b8a6"
+      - "#f97316"
+    level_colors:
+      高价值用户: "#22c55e"
+      潜力用户: "#3b82f6"
+      流失预警: "#f59e0b"
+      沉睡用户: "#ef4444"
+      普通用户: "#94a3b8"
+    gradient_start: "#f0f9ff"
+    gradient_end: "#e0f2fe"
+    gradient_border: "#7dd3fc"
+  chart:
+    plot_bgcolor: "white"
+    paper_bgcolor: "white"
+    grid_color: "#f1f5f9"
+    title_x: 0.5
+    default_height: 440
+    margin:
+      l: 40
+      r: 40
+      t: 60
+      b: 40
+    font_family: "Microsoft YaHei, PingFang SC, sans-serif"
+    hovermode: "x unified"
+    pie_hole: 0.45
+    bar_corner_radius: 3
+
+export:
+  image_width: 1200
+  image_height: 600
+  image_scale: 2
+  max_retries: 3
+  retry_delay: 0.5
+
+channel:
+  cost_rates:
+    APP: 0.15
+    小程序: 0.10
+    H5: 0.18
+    PC端: 0.22
+    default: 0.30
+  profit_margin: 0.45
+  roi_excellent: 2.0
+  roi_qualified: 1.5
+
+sidebar:
+  presets:
+    - label: "全部时间"
+      days: 0
+    - label: "最近7天"
+      days: 7
+    - label: "最近30天"
+      days: 30
+    - label: "最近90天"
+      days: 90
+    - label: "最近半年"
+      days: 180
+    - label: "自定义"
+      days: -1
+  default_preset: "自定义"
